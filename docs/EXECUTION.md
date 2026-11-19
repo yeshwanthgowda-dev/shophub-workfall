@@ -18,8 +18,8 @@ Spec: `shophub.pdf`. Decisions and reasons: `concepts_brief.md`. Report draft: `
 | # | Module | Estimate | State | Commit | Walkthrough done |
 |---|---|---|---|---|---|
 | 0 | Scaffold, contracts, LLM factory, fake LLM | 2.5h | done | 9222c49 | yes |
-| 1 | R0 mock store API | 1–1.5h | in progress (design) | | |
-| 2 | R2 + R3 + R4 orders sub-agent | 4.5–5h | todo | | |
+| 1 | R0 mock store API | 1–1.5h | done | c183ce9 | yes |
+| 2 | R2 + R3 + R4 orders sub-agent | 4.5–5h | code done, awaiting walkthrough | | |
 | 3 | R1 orchestrator thin slice | 3h | todo | | |
 | 4 | R7 persistence | 2h | todo | | |
 | 5 | R5 proposals and approval | 3h | todo | | |
@@ -67,11 +67,11 @@ General rules for all six tools:
 
 SDK cautions: (1) read the `Authorization` header from the SDK's call context and pass it per request, never store it in the SDK task store or task metadata (use the in-memory task store and include its data in the token-scan test); (2) set the card `url` from `A2A_PUBLIC_URL`; (3) the SDK's executor and card fields may differ from the shapes below, so treat the shapes as the contract your code must satisfy, not as SDK names; (4) fallback if the SDK costs more than 90 minutes: hand-roll about 80 lines of FastAPI with the same contract.
 
-* Card at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Fields: name, description, `url` from `A2A_PUBLIC_URL`, skills (id, description, input and output schema), bearer `securitySchemes`.
-* One method: JSON-RPC `message/send`, with a data part `{skill, args}` (include `messageId`). Exactly one skill runs per request; a request naming more than one is rejected. The sub-agent has no LLM (decision recorded in `DESIGN.md`).
+* Card at `/.well-known/agent-card.json` (the older `/agent.json` path is not served). Fields: name, description, `url` from `A2A_PUBLIC_URL`, skills (id, name, description; the argument shape is written in the description, because `a2a-sdk` 1.x skills have no schema fields), bearer `securitySchemes`.
+* One method: JSON-RPC `SendMessage` (the `a2a-sdk` 1.x wire name; `message/send` was the 0.3 name), with a data part `{skill, args}` (include `messageId`). Exactly one skill runs per request; a request naming more than one is rejected. The sub-agent has no LLM (decision recorded in `DESIGN.md`).
 * Auth: token only in the HTTP `Authorization` header. Missing or invalid -> HTTP 401. Business outcomes (not found, invalid state) are in `result` as data. JSON-RPC `error` is for protocol faults only.
 * Skills: read skills plus write skills (`refund_order`, `cancel_order`). The orchestrator binds an explicit allowlist of read skill ids to the model. Write skills are called only from the approve path.
-* Merchant claim: the orchestrator may send `merchant_claim` in the data part. It is never an identity. The sub-agent calls `/auth/me` with the forwarded token (per request, no cross-user cache) and rejects the request on any mismatch or null merchant. The store derives the merchant from the token alone.
+* Merchant claim: the orchestrator may send `merchant_claim` in the data part. It is never an identity. The sub-agent calls `/auth/me` with the forwarded token (per request, no cross-user cache) and rejects a null merchant or invalid token with HTTP 401 (in a middleware). A claim that differs from the token's merchant returns `{ok: false, code: "merchant_mismatch"}` as data and runs nothing. The store derives the merchant from the token alone.
 * Response shape is a typed, allowlisted schema (no email, no phone, no customer name). The orchestrator validates it and re-scrubs before anything reaches the model.
 
 **Gate A contract (intent verifier, orchestrator only)**
@@ -125,7 +125,7 @@ SDK cautions: (1) read the `Authorization` header from the SDK's call context an
 
 ### Module 2 — R2 + R3 + R4 orders sub-agent
 * **Goal:** a deterministic A2A service that owns order tools, forwards the caller's token, and redacts.
-* **Design:** card, `message/send` handler, one `StoreClient` that is the only place calling `httpx` and the only place normalising the legacy envelope (`status is False` or missing id, never truthiness), Pydantic response models, `order_payload.py` (in `tools/subagent_tools/`) dropping email, phone, customer name and note text while adding the boolean `has_note`, regex scrub of notes for email and phone patterns. Token sent per request, never a client default header. Timeouts 5–10s; retry idempotent GETs only.
+* **Design:** card, `SendMessage` handler, one `StoreClient` that is the only place calling `httpx` and the only place normalising the legacy envelope (`status is False` or missing id, never truthiness), Pydantic response models, `order_payload.py` (in `tools/subagent_tools/`) dropping email, phone, customer name and note text while adding the boolean `has_note`, regex scrub of notes for email and phone patterns. Token sent per request, never a client default header. Timeouts 5–10s; retry idempotent GETs only.
 * **Tests:** `test_tenant_isolation` (real store app, matrix over merchant x endpoint x id), `test_legacy_envelope`, `test_redaction_allowlist`, `test_token_forwarded_byte_identical`, `test_concurrent_tokens_no_crosstalk`, `test_fail_closed_null_merchant`, `test_no_direct_httpx_in_tools`, `test_one_skill_per_request`, `test_customer_name_never_in_output`, `test_name_filter_ambiguity_uses_labels`, `test_merchant_claim_mismatch_rejected`, `test_has_note_flag_no_text_leak` (`has_note` is true for orders with a note and false for orders without, and no note text appears in any read-tool output).
 * **Done-gate:** `pytest tests/test_orders_agent.py tests/test_tenancy.py`.
 * **Walkthrough:** where the trust boundary is; why `customer_name` is dropped from output but still usable as a search filter; what the merchant claim adds; the known limit of regex redaction.

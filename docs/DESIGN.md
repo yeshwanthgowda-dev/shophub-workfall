@@ -26,7 +26,7 @@ An AI coding assistant is used for design review and code. The author reviews an
  |  guard -> agent <-> tools   |
  |  propose -> approval -> exec|
  +--------------+--------------+
-                | JSON-RPC message/send, same Authorization header
+                | JSON-RPC SendMessage, same Authorization header
                 v
  +-----------------------------+
  | orders agent :8002 (A2A)    |  no LLM; allowlist + redaction

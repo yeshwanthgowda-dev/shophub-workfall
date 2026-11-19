@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
 
 def connect(path: str) -> sqlite3.Connection:
-    db = sqlite3.connect(path)
+    # One connection per request, used by one request at a time. FastAPI may open it, run the
+    # route and close it on different worker threads, so SQLite's same-thread check must be off.
+    db = sqlite3.connect(path, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA busy_timeout = 5000")
     db.execute("PRAGMA journal_mode = WAL")

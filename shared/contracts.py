@@ -47,12 +47,54 @@ class ProposeArgs(BaseModel):
     order_id: int
 
 
+# ---------- model-facing tools: outputs ----------
+
+class Failure(BaseModel):
+    ok: Literal[False] = False
+    code: str  # not_found, invalid_args, upstream_unavailable, merchant_mismatch, ...
+
+
+class ListOrdersResult(BaseModel):
+    ok: Literal[True] = True
+    orders: list[OrderView]
+
+
+class GetOrderResult(BaseModel):
+    ok: Literal[True] = True
+    order: OrderView
+
+
+class CustomerMatch(BaseModel):
+    customer_label: str | None = None  # "customer #1" when several customers match; never the name
+    orders: list[OrderView]
+
+
+class FindOrdersByCustomerNameResult(BaseModel):
+    ok: Literal[True] = True
+    matches: list[CustomerMatch]
+
+
+class GetOrderNoteResult(BaseModel):
+    ok: Literal[True] = True
+    order_id: int
+    note: str  # scrubbed and wrapped as untrusted
+    note_flagged: bool
+
+
+class WriteOutcome(BaseModel):
+    """Result of refund_order / cancel_order. Business outcomes are data, never raised."""
+    ok: bool
+    code: Literal["OK", "NOT_FOUND_OR_NOT_ACCESSIBLE", "INVALID_STATE", "UPSTREAM_UNAVAILABLE"]
+    order_id: int
+    current_status: OrderStatus | None = None
+
+
 # Names the model may call. Anything else, including refund_order and cancel_order, is rejected.
 READ_TOOLS = ("list_orders", "get_order", "find_orders_by_customer_name", "get_order_note")
 PROPOSE_TOOLS = ("propose_refund", "propose_cancel")
 MODEL_TOOLS = READ_TOOLS + PROPOSE_TOOLS
 
-# ---------- A2A: one JSON-RPC `message/send`, one skill per request ----------
+# ---------- A2A: one JSON-RPC `SendMessage`, one skill per request ----------
 
 READ_SKILLS = READ_TOOLS
 WRITE_SKILLS = ("refund_order", "cancel_order")  # approve path only, never bound to the model
