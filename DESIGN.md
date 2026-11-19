@@ -83,6 +83,8 @@ The model sees only read tools plus `propose_refund` and `propose_cancel`. Write
       |  POST .../reject  or expiry: proposal closed, nothing is executed, order unchanged             |
 ```
 
+Proposal statuses: `pending`, then `approved` (atomic claim on approve), then `executed` (store accepted) or `failed` (store returned 404 or 409, outcome recorded). `rejected` and `expired` end a proposal without a store call. Expiry is lazy: `propose` marks any expired `pending` row for the same order as `expired` before inserting, so an abandoned session cannot block a new proposal through the one-pending-per-order index.
+
 Write skills (`refund_order`, `cancel_order`) exist on the orders agent but are never bound to the model. Only the `execute` node calls them, after Gate B. Chat history never leaves the orchestrator, because Gate A reads it from graph state.
 
 ## Security invariants
@@ -141,6 +143,7 @@ TODO(measure). Typical turn: 1 `/auth/me`, 2–3 LLM calls, 1 A2A hop, 1–2 sto
 | MCP | local only, no benefit | Expose the orders tools as an MCP server and let the orchestrator discover them. |
 | Local or hosted injection classifier | needs network or 1–2 GB of PyTorch and weights; offline rule | Optional flag running Prompt Guard or DeBERTa on notes before wrapping. |
 | Google login | OAuth is "not graded", needs network | Identity provider issues the bearer token. The assistant still never mints one. |
+| Decision model for Gate A | a completions call is faster to build and needs no extra service; speed of development only | Replace the verifier completions call with a dedicated decision model (for example Jev from System One or the Decisions API by Google), behind the same `{matches: bool}` contract. |
 | Dashboard | web UI is not graded | Read-only staff view over the proposals and audit tables. |
 | Sub-entities per merchant | not in the spec | Token carries a store id under a merchant id; all checks use the store id. |
 | TODO | fill in anything else cut during the build | |
@@ -153,4 +156,5 @@ Measure and tune cost per turn; run the eval against two real models; add the op
 
 Add ideas here as they come up. Format: date, idea, why, effort.
 
-* (empty)
+* 2026-11-19. Use a decision model for the Gate A verification check, such as Jev from System One or the Decisions API by Google, instead of a completions call. Why: expected to be faster and cheaper per check. It is not built now, only for convenience and speed of development. Keep the verifier behind one function with the `{matches: bool}` output and the fail-closed rule, so the swap changes one module. The same input rule applies: human messages and the proposed action only, no tool output. Effort: small if the contract holds. Note: these product names are recorded as the author gave them; confirm capabilities, latency, cost and offline behaviour before adopting.
+* 2026-11-19. Add a scheduled job that marks abandoned proposals as expired. Lazy expiry in `propose` already stops stale rows blocking new proposals, but a `pending` row whose user left and whose order is never proposed again stays `pending` after `expires_at`. The job runs `UPDATE proposals SET status='expired' WHERE status='pending' AND expires_at < now` on a schedule. On PostgreSQL use `pg_cron` or an equivalent scheduled SQL function. SQLite has no built-in scheduler, so the equivalent is a background task started in the orchestrator's FastAPI `lifespan`, using the injected clock so tests stay deterministic. Why: keeps the table clean and keeps reports and the dashboard accurate. Effort: small. Constraint: the job must only move `pending` to `expired` and must use the same atomic `WHERE status='pending'` guard as the approve claim, so it cannot race with an approve.
