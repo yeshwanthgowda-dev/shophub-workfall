@@ -7,7 +7,15 @@ wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.venv/
 
-# Environment Variables
+# Environment variables
 .env
+
+# SQLite files (never commit)
+*.db
+*.db-wal
+*.db-shm
+
+# Test caches
+.pytest_cache/

@@ -27,5 +27,5 @@ Read these before changing anything:
 Python, LangGraph, FastAPI, `a2a-sdk` (pinned; hand-rolled fallback if it costs more than 90 minutes), SQLite checkpointer (`AsyncSqliteSaver`), pytest, respx, Docker Compose. One LLM factory function; fake LLM by default; OpenRouter optional.
 
 # Layout (create in module 0)
-`store/`, `orders_agent/`, `orchestrator/`, `shared/` (allowlist, scrubber, untrusted wrapper; imports from no service), `evals/`, `tests/`, `scripts/`, `docs/`.
+`store/`, `orders_agent/`, `orchestrator/`, `shared/` (contracts; imports from no service), `tools/` (`orchestrator_tools/` for model-facing tools, `subagent_tools/` for orders-agent skills, store client and order projection), `sanitizers/` (scrubber, untrusted wrapper for customer notes and typed text), `evals/`, `tests/`, `scripts/`, `docs/`.
 At the end, `README.md` and `DESIGN.md` must sit at the repo root.
