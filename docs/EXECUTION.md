@@ -17,8 +17,8 @@ Spec: `shophub.pdf`. Decisions and reasons: `concepts_brief.md`. Report draft: `
 
 | # | Module | Estimate | State | Commit | Walkthrough done |
 |---|---|---|---|---|---|
-| 0 | Scaffold, contracts, LLM factory, fake LLM | 2.5h | todo | | |
-| 1 | R0 mock store API | 1–1.5h | todo | | |
+| 0 | Scaffold, contracts, LLM factory, fake LLM | 2.5h | done | 9222c49 | yes |
+| 1 | R0 mock store API | 1–1.5h | in progress (design) | | |
 | 2 | R2 + R3 + R4 orders sub-agent | 4.5–5h | todo | | |
 | 3 | R1 orchestrator thin slice | 3h | todo | | |
 | 4 | R7 persistence | 2h | todo | | |
