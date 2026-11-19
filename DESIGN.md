@@ -47,8 +47,43 @@ The model sees only read tools plus `propose_refund` and `propose_cancel`. Write
 3. The model picks a tool. The orchestrator calls the orders agent over JSON-RPC and forwards the token unchanged.
 4. The agent calls the store with the same token, treats `200 + status:false` as a failure, drops email and phone, and returns a typed result.
 5. The orchestrator re-checks the result, wraps any note text as untrusted, and passes it to the model.
-6. For a refund or cancel, the model can only propose. The server fills the details from the store, saves the proposal and pauses. The stream sends a `proposal` event.
+6. For a refund or cancel, the model can only propose. A verifier (Gate A) checks that the user's own messages asked for that exact action. If not, the run ends with a fixed template reply. Otherwise the server fills the details from the store, saves the proposal and pauses. The stream sends a `proposal` event.
 7. The client calls approve or reject. Approve checks the proposal (pending, unexpired, same merchant and thread), re-reads the order, and runs the action with the approver's token.
+
+## Propose and approve
+
+```
+ staff client                  orchestrator :8000                         orders agent :8002      store :8001
+      |  "Refund order 1042"         |                                           |                     |
+      |----------------------------->|                                           |                     |
+      |                              | agent node: model calls propose_refund(1042)                    |
+      |                              |                                           |                     |
+      |                              | GATE A (in orchestrator, no tools)        |                     |
+      |                              |   verifier input: human messages          |                     |
+      |                              |   only + {action, order_id, amount}       |                     |
+      |                              |   output: {matches: bool}, fail closed    |                     |
+      |                              |                                           |                     |
+      |       matches = false        |                                           |                     |
+      |<- fixed template, `done` ----|  graph -> END, model gets no more turns   |                     |
+      |                              |                                           |                     |
+      |       matches = true         |                                           |                     |
+      |                              | token-scoped lookup --------------------->| get_order --------->|
+      |                              |<-- typed, redacted order ------------------|<--------------------|
+      |                              | write `proposals` row (pending, expiry)   |                     |
+      |                              | interrupt()  [store NOT touched]          |                     |
+      |<- SSE `proposal` event ------|  stream ends                              |                     |
+      |                                                                                                |
+      |  POST .../approve  (approver's token)                                                          |
+      |----------------------------->| GATE B: auth/me, pending + unexpired,     |                     |
+      |                              | same merchant + thread, atomic claim,     |                     |
+      |                              | re-fetch order and compare to snapshot    |                     |
+      |                              | execute node (no LLM) ------------------->| refund_order ------>| POST /orders/refund
+      |<- outcome as data -----------|<-- 200 / 404 / 409 (INVALID_STATE) -------|<--------------------|
+      |                                                                                                |
+      |  POST .../reject  or expiry: proposal closed, nothing is executed, order unchanged             |
+```
+
+Write skills (`refund_order`, `cancel_order`) exist on the orders agent but are never bound to the model. Only the `execute` node calls them, after Gate B. Chat history never leaves the orchestrator, because Gate A reads it from graph state.
 
 ## Security invariants
 
@@ -57,6 +92,7 @@ See `concepts_brief.md` (items 1–12). Each maps to a named test in `EXECUTION.
 ## Trade-offs
 
 * **Capability design over detection.** The injection guardrail is deterministic and weak against new phrasings, but a fooled model can only propose, and a human approves.
+* **Intent verifier before any proposal (Gate A).** A separate no-tools completions call sees only human messages and the proposed action, and answers `{matches: bool}`. It removes the injection channel from the "did the user ask for this?" decision, and replaces a blunt rule that refused every proposal in a turn that read notes. Costs: one extra LLM call per proposal; it is probabilistic, so human approval (Gate B) stays the final gate; ambiguous requests such as "refund Maria's order" fail closed and the user must restate with an order id; a refusal streams a fixed template and ends the run, so the model cannot retry in that turn.
 * **Token re-sent on every request.** Costs an `/auth/me` call per turn and makes the client hold the token. It means the system never stores a credential.
 * **SQLite.** No server needed and easy to inspect. One writer, so only the orchestrator owns the file. The compose "database" is this volume.
 * **Deterministic sub-agent behind A2A.** See "Design dilemma" below.
@@ -85,7 +121,7 @@ See `concepts_brief.md` (items 1–12). Each maps to a named test in `EXECUTION.
    * Each real-model call adds roughly 0.5–2 seconds per hop. Fake mode hides this, but a real run does not.
    * There would be two places to hallucinate (wrong tool, invented argument), two places to guard, a second scripted fake, and more eval cases. That is about 1–1.5 extra hours in a plan with 1–3 hours of slack.
    * Tenancy would stay safe with B, because the token enforces it, not a model. But the cost is real and the safety gain is small, since refunds and cancels need human approval either way.
-4. *Why the one-tool rule still holds under A.* Each request runs exactly one skill, so the rule is true by construction. The sub-agent has no model to persuade. The model that reads notes is the orchestrator's. That is why the real protections are different: notes are left out of results by default, wrapped as untrusted when shown, the model can only propose, a human approves, and proposals are refused for the rest of a turn after a note appears in it.
+4. *Why the one-tool rule still holds under A.* Each request runs exactly one skill, so the rule is true by construction. The sub-agent has no model to persuade. The model that reads notes is the orchestrator's. That is why the real protections are different: notes are left out of results by default, wrapped as untrusted when shown, the model can only propose, a verifier that sees only human messages must confirm the user asked for the action before a proposal exists, and a human approves.
 
 **Decision.** Option A. The spec says to give "honest trade-offs," and its wording "owns the order tools" matches a deterministic owner. The sub-agent keeps the jobs that need enforcement more than judgment: credential forwarding (R3) and redaction (R4).
 
@@ -95,7 +131,7 @@ See `concepts_brief.md` (items 1–12). Each maps to a named test in `EXECUTION.
 
 ## Cost and latency per turn
 
-TODO(measure). Typical turn: 1 `/auth/me`, 2–3 LLM calls, 1 A2A hop, 1–2 store calls. Fake mode costs nothing. Real-model cost depends on the provider, so measure tokens in and out from `usage_metadata` and record median and worst-case latency here.
+TODO(measure). Typical turn: 1 `/auth/me`, 2–3 LLM calls, 1 A2A hop, 1–2 store calls. Fake mode costs nothing. Real-model cost depends on the provider, so measure tokens in and out from `usage_metadata` and record median and worst-case latency here. TODO(measure): the intent verifier adds 1 LLM call per proposal; record its latency and tokens separately.
 
 ## What was cut and why
 

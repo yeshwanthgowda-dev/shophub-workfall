@@ -54,7 +54,7 @@ Tests cite these by number.
 6. The model cannot execute a refund or cancel. Only `/approve` can, with a pending, unexpired, single-use proposal whose merchant equals the approver's merchant and the thread's merchant.
 7. The legacy `200 + status:false` envelope is always treated as a failure.
 8. Order state is re-checked at approval time. A changed state returns as data, not as an executed action.
-9. Once a tool result in a turn has put note text into the model's context, `propose_refund` and `propose_cancel` are refused for the rest of that turn. The user can ask again in the next message.
+9. A proposal is created only after a verifier that sees human messages and no tool output confirms the user asked for that exact action. A failed or ambiguous check ends the run with a fixed template reply, and the user can ask again in the next message.
 10. Customer names never appear in tool output or model input. A name typed by the user is used only as a search filter inside the sub-agent.
 11. The merchant is derived from the token alone. A caller-supplied merchant claim is only compared against it, and a mismatch is rejected.
 12. An order has at most one pending proposal. Proposal state lives in the orchestrator's `proposals` table, and a proposal never changes the order's status in the store.
@@ -86,7 +86,7 @@ Tests cite these by number.
 2. Token per request in the `Authorization` header only; carrier outside `configurable`; spike and SQLite scan test on day one.
 3. Capability design: model proposes, `/approve` executes with the approver's token.
 4. SQLite on an orchestrator-owned volume, `proposals` table with atomic claim, expiry with an injected clock (first cut if R5 slips).
-5. Injection layers built: omit note by default (separate `get_order_note` tool), wrap and flag, HITL. Provenance one-liner is optional.
+5. Injection layers built: omit note by default (separate `get_order_note` tool), wrap and flag, intent verifier (human messages only), HITL. Provenance one-liner is optional.
 6. `a2a-sdk` (pinned), deterministic sub-agent, unpublished port.
 7. OpenRouter (OpenAI-compatible base URL) behind the LLM factory for optional real runs; decide later.
 8. Next: review `EXECUTION.md` and `DESIGN.md`, then start step 0 in the new repo. Run `/egm:egm-draft` only if a formal design document is wanted.
