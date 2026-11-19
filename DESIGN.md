@@ -1,6 +1,6 @@
 # DESIGN.md — ShopHub support assistant (living draft)
 
-Status: draft written before coding. Final version must fit 1–3 pages in the code repo. Sections marked **TODO(measure)** need real numbers.
+Status: draft written before coding. Final version must fit 1–3 pages on the `code` branch. Sections marked **TODO(measure)** need real numbers.
 
 ## AI-assistant disclosure
 
@@ -34,7 +34,7 @@ An AI coding assistant is used for design review and code. The author reviews an
                 | same token, per request
                 v
  +-----------------------------+
- | store API :8001 (in-memory) |  decides merchant from token
+ | store API :8001 (SQLite)    |  decides merchant from token
  +-----------------------------+
 ```
 
@@ -60,7 +60,7 @@ The model sees only read tools plus `propose_refund` and `propose_cancel`. Write
       |                              |                                           |                     |
       |                              | GATE A (in orchestrator, no tools)        |                     |
       |                              |   verifier input: human messages          |                     |
-      |                              |   only + {action, order_id, amount}       |                     |
+      |                              |   only + {action, order_id}            |                     |
       |                              |   output: {matches: bool}, fail closed    |                     |
       |                              |                                           |                     |
       |       matches = false        |                                           |                     |
@@ -97,6 +97,7 @@ See `concepts_brief.md` (items 1–12). Each maps to a named test in `EXECUTION.
 * **Intent verifier before any proposal (Gate A).** A separate no-tools completions call sees only human messages and the proposed action, and answers `{matches: bool}`. It removes the injection channel from the "did the user ask for this?" decision, and replaces a blunt rule that refused every proposal in a turn that read notes. Costs: one extra LLM call per proposal; it is probabilistic, so human approval (Gate B) stays the final gate; ambiguous requests such as "refund Maria's order" fail closed and the user must restate with an order id; a refusal streams a fixed template and ends the run, so the model cannot retry in that turn.
 * **Token re-sent on every request.** Costs an `/auth/me` call per turn and makes the client hold the token. It means the system never stores a credential.
 * **SQLite.** No server needed and easy to inspect. One writer, so only the orchestrator owns the file. The compose "database" is this volume.
+* **Store persisted in its own SQLite file.** The spec says R0 is an in-memory service. A restart of the store alone would reseed it and leave `proposals` rows saying `executed` for orders that look untouched. So the store keeps its data in a separate SQLite file on its own volume, seeded once from `seed.py`. A restart keeps the data, and only `STORE_RESEED=true` regenerates it. This deviates from the spec's wording for a stated reason. Costs: more code in module 1, tests need a temp database per test, and a changed `seed.py` does not reach an existing file without a reseed. Each service owns its own file, and the orchestrator and the store never share one.
 * **Deterministic sub-agent behind A2A.** See "Design dilemma" below.
 * **`a2a-sdk`.** Less code to write and follows the protocol. Costs a pinned dependency, API churn risk, and care that its task store never keeps the token.
 * **Customer names dropped from output.** The name is personal data and a possible injection channel. It is used only as a server-side search filter, so "what did Maria order last?" still works. The cost: staff cannot ask "who ordered 1042?", and several customers with the same name appear as `customer #1`, `customer #2`.
@@ -106,7 +107,7 @@ See `concepts_brief.md` (items 1–12). Each maps to a named test in `EXECUTION.
 
 ## Design dilemma: does the orders sub-agent need an LLM?
 
-*Trim this section to a short paragraph when the final DESIGN.md has to fit three pages. Keep the full text in the repo notes.*
+*Trim this section to a short paragraph when the final DESIGN.md has to fit three pages. Keep the full text on the `plan` branch.*
 
 **The question.** R2 asks for a "domain sub-agent" that owns the order tools and is exposed over A2A JSON-RPC. It does not say whether that agent contains a model. The choice affects protocol fit, security, latency, effort, and how a reviewer reads the design.
 
@@ -158,3 +159,6 @@ Add ideas here as they come up. Format: date, idea, why, effort.
 
 * 2026-11-19. Use a decision model for the Gate A verification check, such as Jev from System One or the Decisions API by Google, instead of a completions call. Why: expected to be faster and cheaper per check. It is not built now, only for convenience and speed of development. Keep the verifier behind one function with the `{matches: bool}` output and the fail-closed rule, so the swap changes one module. The same input rule applies: human messages and the proposed action only, no tool output. Effort: small if the contract holds. Note: these product names are recorded as the author gave them; confirm capabilities, latency, cost and offline behaviour before adopting.
 * 2026-11-19. Add a scheduled job that marks abandoned proposals as expired. Lazy expiry in `propose` already stops stale rows blocking new proposals, but a `pending` row whose user left and whose order is never proposed again stays `pending` after `expires_at`. The job runs `UPDATE proposals SET status='expired' WHERE status='pending' AND expires_at < now` on a schedule. On PostgreSQL use `pg_cron` or an equivalent scheduled SQL function. SQLite has no built-in scheduler, so the equivalent is a background task started in the orchestrator's FastAPI `lifespan`, using the injected clock so tests stay deterministic. Why: keeps the table clean and keeps reports and the dashboard accurate. Effort: small. Constraint: the job must only move `pending` to `expired` and must use the same atomic `WHERE status='pending'` guard as the approve claim, so it cannot race with an approve.
+* 2026-11-19. Pass shown order ids to Gate A so references like "refund the first one" can be verified. Today the verifier reads human messages only, so an id that appears only in assistant or tool output fails closed and the user must type the id. The orchestrator would record the ids it displayed, taken from structured store results (integers owned by the merchant, never note text), and pass them in display order. Why: removes a usability cost of the fail-closed rule. Cost: it weakens the "no tool output" rule slightly, because ids from tool results reach the verifier, and it needs ordinal handling. Effort: medium. Guard: validate the ids as integers owned by the caller's merchant, and keep note text out entirely.
+* 2026-11-19. Accept an `order_id` that comes from the orchestrator's model, not only from a human message, when Gate A uses external intelligence such as a decision model (see the entry above) or an LLM that can judge whether the id fits the user's request. Today the id must appear in a human message, because a regex cannot judge intent. Example: "refund my oldest unshipped order" would pass if the verifier can confirm that the id the model picked really is the oldest unshipped order. Why: removes the fail-closed usability cost for requests that name no id. Cost and risk: the verifier then needs the order data behind the id, which reopens an injection channel if it ever reads note text. Guard: pass only structured, redacted order fields (id, status, placed_at, total), never note text, and keep the fail-closed rule and the human `/approve` gate. Related: the "pass shown order ids" entry. Effort: medium.
+* 2026-11-19. Add a defence-in-depth tenant assertion in the orders agent's `StoreClient`. Today the store is the only place that enforces order ownership, and the allowlisted output carries no merchant field, so nothing downstream can cross-check it. The agent would keep `merchant` in its internal response model and, after every store call, assert that each returned order (single, list or name-search row) has the merchant it got from `/auth/me`. Only then would the allowlist drop the field. On a mismatch it returns no data and `{ok: false, code: "internal_error"}` (not `not_found`, which would hide a real bug) and logs a security event with the order id and both merchants, never the token. Why: catches a store bug or a mis-scoped query, such as a list endpoint that forgets its merchant filter. It does not catch a store that lies about the field. Cut now because the store already scopes by token, `test_tenant_isolation` covers it, and the check is overkill for the mock store. Test when built: `test_tenant_assertion_blocks_foreign_row` against a stub store that returns a foreign-merchant order. Effort: small.

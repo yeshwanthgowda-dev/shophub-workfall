@@ -9,7 +9,7 @@ ShopHub hosts many independent merchant stores. Merchant support staff chat with
 
 The central design idea: the model has no authority. It can read and it can propose. Only ordinary code, run after an approval, can change an order. If an injection fools the model, the worst outcome is a bad proposal that a human can reject.
 
-The code goes in a separate repo. This directory holds design files only: this brief, `EXECUTION.md` (build runbook) and `DESIGN.md` (living draft of the R11 deliverable). Time budget is about 24 hours. The author wants all of R0–R11 done and wants to understand every line, so each module follows design, code, test, walkthrough.
+The code goes on the separate `code` branch. The `plan` branch holds design files only: this brief, `EXECUTION.md` (build runbook) and `DESIGN.md` (living draft of the R11 deliverable). Time budget is about 24 hours. The author wants all of R0–R11 done and wants to understand every line, so each module follows design, code, test, walkthrough.
 
 ## Analysis
 
@@ -82,11 +82,11 @@ Tests cite these by number.
 
 ## Key Decisions & Staging for Next Steps
 
-1. Separate code repo, built in this order: step 0 scaffold and fake LLM, R0, R2/R3/R4, R1 thin slice, R7, R5, R6, R8/R9, R10 (with README), R11. Spike R5+R6+R7 right after R1.
+1. Separate `code` branch, built in this order: step 0 scaffold and fake LLM, R0, R2/R3/R4, R1 thin slice, R7, R5, R6, R8/R9, R10 (with README), R11. Spike R5+R6+R7 right after R1.
 2. Token per request in the `Authorization` header only; carrier outside `configurable`; spike and SQLite scan test on day one.
 3. Capability design: model proposes, `/approve` executes with the approver's token.
 4. SQLite on an orchestrator-owned volume, `proposals` table with atomic claim, expiry with an injected clock (first cut if R5 slips).
 5. Injection layers built: omit note by default (separate `get_order_note` tool), wrap and flag, intent verifier (human messages only), HITL. Provenance one-liner is optional.
 6. `a2a-sdk` (pinned), deterministic sub-agent, unpublished port.
 7. OpenRouter (OpenAI-compatible base URL) behind the LLM factory for optional real runs; decide later.
-8. Next: review `EXECUTION.md` and `DESIGN.md`, then start step 0 in the new repo. Run `/egm:egm-draft` only if a formal design document is wanted.
+8. Next: review `EXECUTION.md` and `DESIGN.md`, then start step 0 on the `code` branch. Run `/egm:egm-draft` only if a formal design document is wanted.
