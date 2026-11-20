@@ -14,8 +14,12 @@ EMAIL_PLACEHOLDER = "[email removed]"
 PHONE_PLACEHOLDER = "[phone removed]"
 
 
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def _is_phone(candidate: str) -> bool:
-    return 7 <= sum(c.isdigit() for c in candidate) <= 15
+    digits = sum(c.isdigit() for c in DATE_RE.sub("", candidate))  # "2026-11-01" is a date, not a phone
+    return 7 <= digits <= 15
 
 
 def scrub(text: str) -> str:

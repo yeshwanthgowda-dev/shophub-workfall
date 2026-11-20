@@ -64,3 +64,63 @@ async def agent(tmp_path):
     yield AgentHarness(client, agent_app, store_client)
     await client.aclose()
     await store_client.aclose()
+
+
+# ---------- orchestrator harness: real store + real orders agent + orchestrator, all in-process ----------
+from orchestrator.app import create_app as create_orchestrator
+from orchestrator.fake_llm import FakeChatModel
+
+
+class OrchHarness:
+    def __init__(self, client, llm, store_http, agent_app, a2a_http):
+        self.client, self.llm, self.store_http, self.agent_app, self.a2a_http = client, llm, store_http, agent_app, a2a_http
+
+    async def chat(self, message: str, token: str | None = TOKEN_A, header: str | None = None) -> httpx.Response:
+        headers = {}
+        if header is not None:
+            headers["Authorization"] = header
+        elif token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        return await self.client.post("/chat", json={"message": message}, headers=headers)
+
+    async def reply(self, message: str, token: str | None = TOKEN_A) -> str:
+        resp = await self.chat(message, token)
+        assert resp.status_code == 200, resp.text
+        return resp.json()["reply"]
+
+    def model_inputs(self) -> list[tuple[str, str]]:
+        """Everything the model was ever given: (message type, text including tool-call arguments)."""
+        seen = []
+        for batch in self.llm.calls:
+            for message in batch:
+                seen.append((message.type, str(message.content) + str(getattr(message, "tool_calls", ""))))
+        return seen
+
+    async def order_status(self, order_id: int, token: str = TOKEN_A) -> str:
+        resp = await self.store_http.get("/orders/lookup", params={"id": order_id}, headers={"Authorization": f"Bearer {token}"})
+        return resp.json()["status"]
+
+
+@pytest.fixture
+async def make_orch(tmp_path):
+    """Factory: build the whole system around any LLM, or around a custom agent transport."""
+    opened = []
+
+    async def build(llm=None, agent_transport=None):
+        llm = llm or FakeChatModel()
+        store_http = httpx.AsyncClient(transport=httpx.ASGITransport(app=create_store(str(tmp_path / "store.db"))), base_url="http://store")
+        agent_app = create_agent(http_client=store_http, clock=lambda: FIXED_NOW)
+        a2a_http = httpx.AsyncClient(transport=agent_transport or httpx.ASGITransport(app=agent_app))
+        orch_app = create_orchestrator(llm=llm, store_http=store_http, a2a_http=a2a_http, a2a_retry_delay=0)
+        client = httpx.AsyncClient(transport=httpx.ASGITransport(app=orch_app), base_url="http://orch")
+        opened.extend([client, a2a_http, store_http])
+        return OrchHarness(client, llm, store_http, agent_app, a2a_http)
+
+    yield build
+    for client in opened:
+        await client.aclose()
+
+
+@pytest.fixture
+async def orch(make_orch):
+    return await make_orch()

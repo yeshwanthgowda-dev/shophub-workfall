@@ -27,3 +27,9 @@ def test_wrap_untrusted_marks_flags_and_resists_marker_injection():
     assert not flagged_plain and "back door" in plain
     scrubbed, _ = prepare_note("mail me at maria@example.com")
     assert "maria@example.com" not in scrubbed
+
+
+def test_date_is_not_a_phone():
+    assert not contains_pii("orders placed on 2026-11-01 please")
+    assert scrub("placed 2026-11-01 and 2026-11-12") == "placed 2026-11-01 and 2026-11-12"
+    assert contains_pii("call 415-555-0134 about 2026-11-01")  # a real phone next to a date is still caught

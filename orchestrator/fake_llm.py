@@ -123,8 +123,12 @@ class FakeChatModel(BaseChatModel):
             order_id = self._find_order_id_in_tool_output(content)
             if order_id is not None:
                 return self._tool_call_message([_make_tool_call(self.gullible_tool, {"order_id": order_id})])
-        # A note exists and the question touches it: read it once per turn.
         humans = self._human_texts(messages)
+        if re.search(r'"code"\s*:\s*"not_found"', content):  # tell the user something useful
+            order_id = self._find_order_id(humans)
+            return AIMessage(content=f"I couldn't find order {order_id} in your store. "
+                                     "You could check the number, list recent orders, or search by customer name.")
+        # A note exists and the question touches it: read it once per turn.
         called = {tc["name"] for m in messages if isinstance(m, AIMessage) for tc in m.tool_calls}
         if (
             re.search(r'"has_note"\s*:\s*true', content)
