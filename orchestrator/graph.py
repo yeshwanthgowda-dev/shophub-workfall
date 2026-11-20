@@ -36,7 +36,7 @@ def tool_calls_this_turn(messages: list[BaseMessage]) -> int:
     return count
 
 
-def build_graph(llm, tools, max_tool_calls: int = 6):
+def build_graph(llm, tools, checkpointer=None, max_tool_calls: int = 6):
     model = llm.bind_tools(tools)
     tools_by_name = {tool.name: tool for tool in tools}
 
@@ -85,4 +85,4 @@ def build_graph(llm, tools, max_tool_calls: int = 6):
     graph.add_conditional_edges("pre_model_guard", after_guard, ["agent", END])
     graph.add_conditional_edges("agent", after_agent, ["tools", END])
     graph.add_edge("tools", "agent")
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
