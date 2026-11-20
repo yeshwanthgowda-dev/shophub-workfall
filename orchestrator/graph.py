@@ -10,6 +10,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import ValidationError
 
+from orchestrator.approval_nodes import make_approval_nodes
 from orchestrator.prompts import SYSTEM_PROMPT
 from sanitizers.scrubber import contains_pii
 from shared.contracts import Failure
@@ -23,6 +24,10 @@ TOOL_LIMIT_REPLY = "I've reached the tool call limit for this question. Please a
 
 class ChatState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    note_read: bool          # a note was read this turn: only picks the refusal wording and flags the proposal
+    proposed: bool           # a propose call was handled this turn (one per turn)
+    proposal_id: str | None  # the pending proposal this run is waiting on
+    decision: str | None     # "approve" or "reject", from the human
 
 
 def tool_calls_this_turn(messages: list[BaseMessage]) -> int:
@@ -36,16 +41,21 @@ def tool_calls_this_turn(messages: list[BaseMessage]) -> int:
     return count
 
 
-def build_graph(llm, tools, checkpointer=None, max_tool_calls: int = 6):
-    model = llm.bind_tools(tools)
+def build_graph(llm, tools, checkpointer=None, max_tool_calls: int = 6, *, propose_tools=(), proposals=None,
+                verifier=None, call_skill=None):
+    """`tools` run in the tools node. `propose_tools` are shown to the model but handled by the propose node."""
+    model = llm.bind_tools(list(tools) + list(propose_tools))
     tools_by_name = {tool.name: tool for tool in tools}
+    propose, after_propose, approval, after_approval, execute = make_approval_nodes(proposals, verifier, call_skill)
+    propose_names = {tool.name for tool in propose_tools}
 
     async def pre_model_guard(state: ChatState) -> dict:
         """User-typed email or phone never reaches the model: answer with a fixed refusal."""
         last = state["messages"][-1]
+        fresh_turn = {"note_read": False, "proposed": False, "proposal_id": None, "decision": None}
         if isinstance(last, HumanMessage) and contains_pii(str(last.content)):
-            return {"messages": [AIMessage(PII_REFUSAL)]}
-        return {}
+            return {**fresh_turn, "messages": [AIMessage(PII_REFUSAL)]}
+        return fresh_turn
 
     def after_guard(state: ChatState) -> str:
         return END if isinstance(state["messages"][-1], AIMessage) else "agent"
@@ -58,7 +68,9 @@ def build_graph(llm, tools, checkpointer=None, max_tool_calls: int = 6):
 
     def after_agent(state: ChatState) -> str:
         last = state["messages"][-1]
-        return "tools" if isinstance(last, AIMessage) and last.tool_calls else END
+        if not (isinstance(last, AIMessage) and last.tool_calls):
+            return END
+        return "propose" if any(call["name"] in propose_names for call in last.tool_calls) else "tools"
 
     async def tools_node(state: ChatState) -> dict:
         results = []
@@ -75,7 +87,8 @@ def build_graph(llm, tools, checkpointer=None, max_tool_calls: int = 6):
                     log.exception("tool %s failed", call["name"])
                     content = Failure(code="tool_error").model_dump_json()
             results.append(ToolMessage(content=content, tool_call_id=call["id"], name=call["name"]))
-        return {"messages": results}
+        read_a_note = any(m.name == "get_order_note" and '"ok":true' in m.content for m in results)
+        return {"messages": results, **({"note_read": True} if read_a_note else {})}
 
     graph = StateGraph(ChatState)
     graph.add_node("pre_model_guard", pre_model_guard)
@@ -83,6 +96,12 @@ def build_graph(llm, tools, checkpointer=None, max_tool_calls: int = 6):
     graph.add_node("tools", tools_node)
     graph.add_edge(START, "pre_model_guard")
     graph.add_conditional_edges("pre_model_guard", after_guard, ["agent", END])
-    graph.add_conditional_edges("agent", after_agent, ["tools", END])
+    graph.add_node("propose", propose)
+    graph.add_node("approval", approval)
+    graph.add_node("execute", execute)
+    graph.add_conditional_edges("agent", after_agent, ["tools", "propose", END])
     graph.add_edge("tools", "agent")
+    graph.add_conditional_edges("propose", after_propose, ["agent", "approval", END])
+    graph.add_conditional_edges("approval", after_approval, ["execute", END])
+    graph.add_edge("execute", END)
     return graph.compile(checkpointer=checkpointer)

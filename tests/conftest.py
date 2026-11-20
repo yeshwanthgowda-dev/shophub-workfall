@@ -14,15 +14,14 @@ def _fake_provider(monkeypatch):
 
 # ---------- orders agent harness: real store app, agent app, raw JSON-RPC ----------
 import uuid
-from datetime import datetime, timezone
+
 
 import httpx
 
+from evals.system import FIXED_NOW, TOKEN_A, TOKEN_B, TOKEN_NOBODY, build_system  # noqa: F401  (tests import the tokens from here)
 from orders_agent.app import create_app as create_agent
 from store.app import create_app as create_store
 
-FIXED_NOW = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
-TOKEN_A, TOKEN_B, TOKEN_NOBODY = "tok_demo_merchant_a", "tok_demo_merchant_b", "tok_demo_nomerchant"
 
 
 class AgentHarness:
@@ -67,72 +66,21 @@ async def agent(tmp_path):
 
 
 # ---------- orchestrator harness: real store + real orders agent + orchestrator, all in-process ----------
-from contextlib import AsyncExitStack
-
-from orchestrator.app import create_app as create_orchestrator
-from orchestrator.fake_llm import FakeChatModel
 
 
-class OrchHarness:
-    def __init__(self, client, llm, store_http, agent_app, a2a_http, db_path=None, stack=None):
-        self.client, self.llm, self.store_http, self.agent_app, self.a2a_http = client, llm, store_http, agent_app, a2a_http
-        self.db_path, self.stack = db_path, stack
-
-    async def close(self):
-        """Shut the orchestrator down (runs its lifespan exit, closing the SQLite connections)."""
-        await self.stack.aclose()
-
-    async def chat(self, message: str, token: str | None = TOKEN_A, header: str | None = None,
-                   thread_id: str | None = None) -> httpx.Response:
-        headers = {}
-        if header is not None:
-            headers["Authorization"] = header
-        elif token is not None:
-            headers["Authorization"] = f"Bearer {token}"
-        body = {"message": message, **({"thread_id": thread_id} if thread_id else {})}
-        return await self.client.post("/chat", json=body, headers=headers)
-
-    async def reply(self, message: str, token: str | None = TOKEN_A, thread_id: str | None = None) -> str:
-        resp = await self.chat(message, token, thread_id=thread_id)
-        assert resp.status_code == 200, resp.text
-        return resp.json()["reply"]
-
-    def model_inputs(self) -> list[tuple[str, str]]:
-        """Everything the model was ever given: (message type, text including tool-call arguments)."""
-        seen = []
-        for batch in self.llm.calls:
-            for message in batch:
-                seen.append((message.type, str(message.content) + str(getattr(message, "tool_calls", ""))))
-        return seen
-
-    async def order_status(self, order_id: int, token: str = TOKEN_A) -> str:
-        resp = await self.store_http.get("/orders/lookup", params={"id": order_id}, headers={"Authorization": f"Bearer {token}"})
-        return resp.json()["status"]
-
-
+# ---------- orchestrator harness: see evals/system.py ----------
 @pytest.fixture
 async def make_orch(tmp_path):
     """Factory: build the whole system around any LLM, or around a custom agent transport."""
-    stacks = []
+    systems = []
 
-    async def build(llm=None, agent_transport=None):
-        llm = llm or FakeChatModel()
-        store_http = httpx.AsyncClient(transport=httpx.ASGITransport(app=create_store(str(tmp_path / "store.db"))), base_url="http://store")
-        agent_app = create_agent(http_client=store_http, clock=lambda: FIXED_NOW)
-        a2a_http = httpx.AsyncClient(transport=agent_transport or httpx.ASGITransport(app=agent_app))
-        db_path = str(tmp_path / "orchestrator.db")  # same path on every build, so a second build is a "restart"
-        orch_app = create_orchestrator(llm=llm, store_http=store_http, a2a_http=a2a_http, a2a_retry_delay=0, db_path=db_path)
-        client = httpx.AsyncClient(transport=httpx.ASGITransport(app=orch_app), base_url="http://orch")
-        stack = AsyncExitStack()  # ASGITransport does not run the lifespan, so enter it here
-        await stack.enter_async_context(orch_app.router.lifespan_context(orch_app))
-        for closer in (client, a2a_http, store_http):
-            stack.push_async_callback(closer.aclose)
-        stacks.append(stack)
-        return OrchHarness(client, llm, store_http, agent_app, a2a_http, db_path, stack)
+    async def build(llm=None, agent_transport=None, verifier=None):
+        systems.append(await build_system(tmp_path, llm, agent_transport, verifier))  # same dir every time: a second build is a "restart"
+        return systems[-1]
 
     yield build
-    for stack in stacks:
-        await stack.aclose()  # does nothing if the test already closed it
+    for system in systems:
+        await system.close()  # does nothing if the test already closed it
 
 
 @pytest.fixture

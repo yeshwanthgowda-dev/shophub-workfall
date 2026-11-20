@@ -21,10 +21,10 @@ Spec: `shophub.pdf`. Decisions and reasons: `concepts_brief.md`. Report draft: `
 | 1 | R0 mock store API | 1–1.5h | done | c183ce9 | yes |
 | 2 | R2 + R3 + R4 orders sub-agent | 4.5–5h | done | de06d30 | yes |
 | 3 | R1 orchestrator thin slice | 3h | done | 6266eb0 | yes |
-| 4 | R7 persistence | 2h | code done, awaiting walkthrough | | |
-| 5 | R5 proposals and approval | 3h | todo | | |
-| 6 | R6 streaming | 1.5–2h | todo | | |
-| 7 | R8 tests + R9 eval harness | 2.5–3h | todo | | |
+| 4 | R7 persistence | 2h | done | see git log | yes |
+| 5 | R5 proposals and approval | 3h | done | see git log | yes |
+| 6 | R6 streaming | 1.5–2h | done | see git log | yes |
+| 7 | R8 tests + R9 eval harness | 2.5–3h | done | see git log | yes |
 | 8 | R10 Docker + README | 2–2.5h | todo | | |
 | 9 | R11 DESIGN.md final | 1.5–2h | todo | | |
 | | Buffer | 1–3h | | | |
